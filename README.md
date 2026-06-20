@@ -27,7 +27,30 @@ cd omni-img
 bash install.sh
 ```
 
-`install.sh` copia `omni-img` pra `/usr/local/bin/` (com `sudo` se precisar) e cria `~/.config/omni-img/`.
+O `install.sh` instala **três coisas**:
+
+1. **CLI binário** em `/usr/local/bin/omni-img` (com `sudo` se precisar)
+2. **Claude Code skill global** em `~/.claude/skills/omni-img/` — fica disponível em qualquer projeto aberto no Claude Code
+3. **Hermes Agent skill** em `~/.hermes/skills/media/omni-img/` (se você usa Hermes)
+
+Pode rodar de novo a qualquer momento pra atualizar.
+
+### Instalação manual (só CLI)
+
+Se não quiser o skill global, copie só o binário:
+
+```bash
+chmod +x omni_img
+sudo mv omni_img /usr/local/bin/
+```
+
+### Desinstalar
+
+```bash
+sudo rm /usr/local/bin/omni-img
+rm -rf ~/.claude/skills/omni-img
+rm -rf ~/.hermes/skills/media/omni-img
+```
 
 ## Configuração (uma vez)
 
