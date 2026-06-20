@@ -147,6 +147,34 @@ Tudo sem hardcode — URL e key configuráveis, sem dependências externas (só 
 - Sem streaming (gera 1 imagem por vez)
 - Sem máscara explícita por enquanto — passa o prompt de edição
 
+## Modelos compatíveis (probe real 2026-06-20)
+
+Probei todos os **145 modelos image-capable** do OmniRoute real. Resultado:
+
+| Status | Count | O quê |
+|---|---|---|
+| OK | 2 | `codex/gpt-5.5`, `antigravity/gemini-3.1-flash-image` |
+| NO_CRED | 105 | Sem credencial configurada (kie, fal-ai, openrouter, pollinations, ...) |
+| BAD_REQ | 34 | Modelos image-to-image (exigem imagem de entrada) |
+| UPSTREAM | 5 | Timeout/erro upstream transitório |
+
+**Top providers sem credencial** (ative no painel do OmniRoute se quiser usar):
+- `kie` (36 modelos) — text-to-image + image-edit via KIE.ai
+- `fal-ai` (12) — Flux, Nano-Banana, Recraft, Stable Diffusion
+- `black-forest-labs` (9) — Flux oficial
+- `pollinations` (8) — sem key necessária, free
+- `openrouter` (7) — Gemini/Flux via OpenRouter
+- `stability-ai` (6) — SD3.5, inpaint, outpaint, erase
+- `fireworks` (5) — Flux Kontext
+- `recraft` (4), `openai` (3), `nanogpt` (3), `xai` (2), `nanobanana` (2), `leonardo` (2), `ideogram` (2), `chatgpt-web` (1), `nebius` (1), `hyperbolic` (1), `haiper` (1)
+
+**Modelos image-to-image** (precisam de imagem de entrada, não funcionam com `generate`):
+- `together/*` (10 modelos: FLUX, Qwen, Gemini via Together AI)
+- `stability-ai/erase|inpaint|outpaint|remove-background|search-and-replace|search-and-recolor|replace-background-and-relight` (7)
+- `kie/*-edit` e `kie/*-image-to-image` (~20)
+
+Use o subcomando `edit` pra esses.
+
 ## Licença
 
 MIT
