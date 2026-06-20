@@ -1,0 +1,333 @@
+#!/usr/bin/env python3
+"""
+omni-img — CLI pra listar/testar modelos de imagem do OmniRoute.
+
+Subcomandos:
+  config   Configura base URL e API key (template, sem hardcode)
+  models   Lista modelos disponiveis (filtra image-capable)
+  pick     Interativo: escolhe modelos na ordem desejada
+  test     Gera 1 imagem teste pra validar credenciais
+
+Config (ordem de prioridade):
+  1. env vars: OMNI_BASE_URL, OMNI_API_KEY
+  2. arquivo: ~/.config/omni-img/config.toml
+
+Uso:
+  omni-img config https://sua-ominiroute.com.br sk-xxx
+  omni-img models
+  omni-img pick            # salva em ~/.config/omni-img/selected.toml
+  omni-img test "um gato"  # usa primeiro modelo selecionado
+
+Instalacao:
+  chmod +x omni-img
+  sudo mv omni-img /usr/local/bin/
+"""
+import argparse
+import json
+import os
+import ssl
+import sys
+import tomllib
+import urllib.request
+import urllib.error
+from pathlib import Path
+
+CONFIG_DIR = Path.home() / ".config" / "omni-img"
+CONFIG_FILE = CONFIG_DIR / "config.toml"
+SELECTED_FILE = CONFIG_DIR / "selected.toml"
+
+
+# ---------- Config ----------
+
+def load_config():
+    """Carrega config: env vars > arquivo toml."""
+    base_url = os.environ.get("OMNI_BASE_URL")
+    api_key = os.environ.get("OMNI_API_KEY")
+    if not base_url or not api_key:
+        if CONFIG_FILE.exists():
+            with open(CONFIG_FILE, "rb") as f:
+                data = tomllib.load(f)
+            base_url = base_url or data.get("base_url")
+            api_key = api_key or data.get("api_key")
+    if not base_url:
+        raise SystemExit("ERROR: base_url nao configurado. Rode: omni-img config <URL> <KEY>")
+    if not api_key:
+        raise SystemExit("ERROR: api_key nao configurado. Rode: omni-img config <URL> <KEY>")
+    return base_url.rstrip("/"), api_key
+
+
+def save_config(base_url, api_key):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_FILE, "w") as f:
+        f.write(f'base_url = "{base_url}"\n')
+        f.write(f'api_key = "{api_key}"\n')
+    print(f"OK: salvo em {CONFIG_FILE}")
+    print(f"     base_url = {base_url}")
+
+
+# ---------- HTTP helper ----------
+
+def http_get(url, api_key, timeout=20):
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+        return json.loads(r.read())
+
+
+def http_post(url, api_key, payload, timeout=60):
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=data, headers={
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+        return json.loads(r.read())
+
+
+# ---------- Image-capable detection ----------
+
+IMAGE_KEYWORDS = (
+    "image", "imagen", "dall-e", "dalle", "sd", "flux", "sdxl",
+    "midjourney", "kandinsky", "playground", "gemini-image",
+    "imagegeneration", "image-generation",
+)
+
+
+def is_image_capable(model_id, model_meta=None):
+    """Heuristica: keywords no id ou metadados."""
+    mid = model_id.lower()
+    if any(k in mid for k in IMAGE_KEYWORDS):
+        return True
+    if model_meta:
+        meta_str = json.dumps(model_meta).lower()
+        if any(k in meta_str for k in IMAGE_KEYWORDS):
+            return True
+        # Arquiteturas conhecidas (OmniRoute info)
+        arch = (model_meta.get("architecture") or {}).get("modality", "")
+        if "image" in arch:
+            return True
+    return False
+
+
+# ---------- Subcommands ----------
+
+def cmd_config(args):
+    base_url = args.url
+    api_key = args.key
+    if not base_url or not api_key:
+        raise SystemExit("Uso: omni-img config <BASE_URL> <API_KEY>")
+    save_config(base_url, api_key)
+
+
+def cmd_models(args):
+    base_url, api_key = load_config()
+    print(f"Buscando modelos em {base_url}/v1/models ...")
+    try:
+        data = http_get(f"{base_url}/v1/models", api_key)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:500]
+        raise SystemExit(f"ERROR HTTP {e.code}: {body}")
+    except Exception as e:
+        raise SystemExit(f"ERROR: {e}")
+
+    models = data.get("data", [])
+    if not models:
+        print(f"Resposta sem campo 'data'. Total entries: {len(models)}")
+        print(json.dumps(data, indent=2)[:2000])
+        return
+
+    print(f"\nTotal de modelos: {len(models)}\n")
+
+    image_models = []
+    for m in models:
+        mid = m.get("id", "?")
+        meta = m.get("meta") or {}
+        cap = is_image_capable(mid, meta)
+        marker = "[IMG]" if cap else "     "
+        print(f"  {marker} {mid}")
+        if cap:
+            image_models.append(mid)
+
+    print(f"\nDetectados como image-capable: {len(image_models)}")
+    if image_models:
+        print("Para selecionar interativamente: omni-img pick")
+
+
+def cmd_pick(args):
+    base_url, api_key = load_config()
+    data = http_get(f"{base_url}/v1/models", api_key)
+    models = data.get("data", [])
+    image_models = [m.get("id") for m in models if is_image_capable(m.get("id", ""), m.get("meta"))]
+
+    if not image_models:
+        print("Nenhum modelo image-capable detectado.")
+        print("Mostrando todos os modelos:")
+        for i, m in enumerate(models, 1):
+            print(f"  {i:3d}. {m.get('id', '?')}")
+        raw = input("\nEscolha os modelos (numeros separados por virgula, na ordem desejada): ")
+    else:
+        print("Modelos image-capable disponiveis:")
+        for i, mid in enumerate(image_models, 1):
+            print(f"  {i:3d}. {mid}")
+        print(f"\nOutros modelos disponiveis: {len(models) - len(image_models)} (digite 'all' pra ver)")
+        raw = input("\nEscolha (numeros separados por virgula, na ordem desejada): ").strip()
+
+        # Se usuario digitou 'all', mostra todos
+        if raw.lower() == "all":
+            print("\nTodos os modelos:")
+            for i, m in enumerate(models, 1):
+                print(f"  {i:3d}. {m.get('id', '?')}")
+            raw = input("\nEscolha (numeros separados por virgula, na ordem desejada): ").strip()
+
+    if not raw:
+        raise SystemExit("Nada selecionado.")
+
+    indices = [int(x.strip()) - 1 for x in raw.split(",") if x.strip().isdigit()]
+    if not indices:
+        raise SystemExit("Selecao invalida.")
+
+    chosen = []
+    base_list = image_models if image_models else [m.get("id") for m in models]
+    for idx in indices:
+        if 0 <= idx < len(base_list):
+            chosen.append(base_list[idx])
+
+    if not chosen:
+        raise SystemExit("Nenhum modelo valido selecionado.")
+
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(SELECTED_FILE, "w") as f:
+        f.write("# Ordem de prioridade dos modelos de imagem\n")
+        f.write("# Usado pelo test (round-robin) ou pelo bot\n")
+        for i, m in enumerate(chosen, 1):
+            f.write(f'model_{i} = "{m}"\n')
+    print(f"\nOK: {len(chosen)} modelos salvos em {SELECTED_FILE}")
+    for i, m in enumerate(chosen, 1):
+        print(f"  {i}. {m}")
+
+
+def cmd_test(args):
+    base_url, api_key = load_config()
+    prompt = args.prompt or "uma abacaxi sorridente no espaco, pixel art"
+
+    # Carrega modelos selecionados (ou pega o primeiro image-capable)
+    models = []
+    if SELECTED_FILE.exists():
+        with open(SELECTED_FILE, "rb") as f:
+            data = tomllib.load(f)
+        models = [v for k, v in sorted(data.items()) if k.startswith("model_")]
+
+    if not models:
+        print("Nenhum modelo selecionado. Rodando omni-img pick ...")
+        cmd_pick(argparse.Namespace())
+        if SELECTED_FILE.exists():
+            with open(SELECTED_FILE, "rb") as f:
+                data = tomllib.load(f)
+            models = [v for k, v in sorted(data.items()) if k.startswith("model_")]
+
+    if not models:
+        raise SystemExit("Sem modelos pra testar.")
+
+    # Tenta cada modelo na ordem
+    for model_id in models:
+        print(f"\n--- Testando modelo: {model_id} ---")
+        payload = {
+            "model": model_id,
+            "prompt": prompt,
+            "n": 1,
+            "size": "512x512",
+        }
+        try:
+            resp = http_post(f"{base_url}/v1/images/generations", api_key, payload)
+            print(f"OK: resposta recebida")
+            print(json.dumps(resp, indent=2)[:1500])
+            # Tenta baixar primeira imagem
+            images = []
+            if isinstance(resp, dict):
+                if "data" in resp and isinstance(resp["data"], list):
+                    for item in resp["data"]:
+                        if isinstance(item, dict):
+                            if item.get("url"):
+                                images.append(item["url"])
+                            elif item.get("b64_json"):
+                                images.append("b64:" + item["b64_json"][:50] + "...")
+                elif "url" in resp:
+                    images.append(resp["url"])
+                elif "images" in resp and isinstance(resp["images"], list):
+                    images.extend(resp["images"])
+            if images:
+                print(f"\nImagens geradas: {len(images)}")
+                for img in images[:3]:
+                    print(f"  {img[:120]}")
+            return  # sucesso, sai
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()[:300]
+            print(f"  HTTP {e.code}: {body}")
+        except Exception as e:
+            print(f"  Erro: {e}")
+
+    raise SystemExit("\nTodos os modelos falharam. Verifique credenciais e modelos.")
+
+
+def cmd_show(args):
+    """Mostra config atual."""
+    print(f"Config file: {CONFIG_FILE}")
+    print(f"Selected file: {SELECTED_FILE}")
+    if CONFIG_FILE.exists():
+        with open(CONFIG_FILE, "rb") as f:
+            data = tomllib.load(f)
+        base = data.get("base_url", "?")
+        key = data.get("api_key", "?")
+        masked = key[:8] + "..." + key[-4:] if len(key) > 12 else "***"
+        print(f"  base_url: {base}")
+        print(f"  api_key:  {masked}")
+    else:
+        print("  (nao configurado)")
+    if SELECTED_FILE.exists():
+        print("\nModelos selecionados:")
+        with open(SELECTED_FILE, "rb") as f:
+            data = tomllib.load(f)
+        for k in sorted(data):
+            print(f"  {k} = {data[k]}")
+    else:
+        print("\n  (nenhum modelo selecionado)")
+
+
+# ---------- Main ----------
+
+def main():
+    parser = argparse.ArgumentParser(prog="omni-img", description="OmniRoute image models CLI")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_config = sub.add_parser("config", help="Configura base URL e API key")
+    p_config.add_argument("url", help="Base URL do OmniRoute (ex: https://ominiroute.example.com)")
+    p_config.add_argument("key", help="API key")
+    p_config.set_defaults(func=cmd_config)
+
+    p_models = sub.add_parser("models", help="Lista modelos image-capable")
+    p_models.set_defaults(func=cmd_models)
+
+    p_pick = sub.add_parser("pick", help="Selecao interativa de modelos")
+    p_pick.set_defaults(func=cmd_pick)
+
+    p_test = sub.add_parser("test", help="Gera 1 imagem teste")
+    p_test.add_argument("prompt", nargs="?", help="Prompt pra imagem (default: abacaxi)")
+    p_test.set_defaults(func=cmd_test)
+
+    p_show = sub.add_parser("show", help="Mostra config atual")
+    p_show.set_defaults(func=cmd_show)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
