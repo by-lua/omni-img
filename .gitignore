@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+.pytest_cache/
+.venv/
+venv/
+
+# Config (nunca commitar credenciais)
+*.toml.local
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
