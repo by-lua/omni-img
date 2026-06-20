@@ -1,95 +1,152 @@
 # omni-img
 
-CLI pra listar e testar modelos de geração de imagem do OmniRoute.
+Gera e edita imagens via [OmniRoute](https://github.com/diegosouzapw/OmniRoute) usando os **limites gratuitos** das contas que você já tem (Gemini, GPT, etc) — sem pagar API cara.
 
-Pensado pra rodar dentro do Claude Code CLI como ferramenta companion — você configura a URL/key do OmniRoute uma vez, lista modelos, escolhe na ordem, e roda testes pra descobrir qual provider/credential tá funcional.
+CLI único, **stdlib-only** (Python 3.11+, sem `pip install`), pensado pra rodar dentro do **Claude Code** ou qualquer terminal.
 
-## Instalacao
+## O que faz
+
+- Lista os modelos image-capable do seu OmniRoute (`omni-img models`)
+- Você escolhe a ordem de preferência e salva (`omni-img pick`)
+- **Gera imagens** reais via `/v1/images/generations` e salva em `./out/` (`omni-img generate "um gato"`)
+- **Edita imagens** existentes via `/v1/images/edits` (multipart + prompt) e salva em `./out/` (`omni-img edit foto.png "coloca óculos de sol"`)
+- Se um modelo der rate-limit (HTTP 429) ou erro, cai pro próximo da lista automaticamente
+- Sem hardcode: URL base e API key ficam em `~/.config/omni-img/config.toml` (ou env vars)
+
+## Pré-requisito
+
+Você precisa ter o **OmniRoute rodando** e configurado com suas contas (Gemini, GPT, etc). Sem isso não tem como gerar nada.
+
+→ https://github.com/diegosouzapw/OmniRoute
+
+## Instalação
 
 ```bash
-git clone https://github.com/inovalabsx/omni-img.git
+git clone https://github.com/by-lua/omni-img.git
 cd omni-img
 bash install.sh
 ```
 
-Requer Python 3.11+ (usa `tomllib` stdlib). Sem deps externas.
+`install.sh` copia `omni-img` pra `/usr/local/bin/` (com `sudo` se precisar) e cria `~/.config/omni-img/`.
+
+## Configuração (uma vez)
+
+```bash
+omni-img config https://sua-ominiroute.com.br sk-xxx
+```
+
+Ou via env vars (útil pra CI/cron/Claude Code):
+
+```bash
+export OMNI_BASE_URL="https://sua-ominiroute.com.br"
+export OMNI_API_KEY="sk-xxx"
+```
 
 ## Uso
 
+### 1. Ver modelos disponíveis
+
 ```bash
-# 1. Configurar (uma vez)
-omni-img config https://lua.ominiroute.inovalabx.com.br sk-xxx
-
-# 2. Ver modelos disponiveis (marca image-capable com [IMG])
 omni-img models
+```
 
-# 3. Selecionar modelos na ordem (interativo)
+Lista os modelos do endpoint canônico do OmniRoute (`GET /v1/images/generations`) e mostra `owned_by` + `supported_sizes`.
+
+### 2. Escolher a ordem de fallback
+
+```bash
 omni-img pick
-# Escolha (numeros separados por virgula, na ordem desejada): 3,1,5,2
+```
 
-# 4. Testar credenciais gerando 1 imagem (round-robin na lista)
-omni-img test "um gato astronauta em pixel art"
+Mostra os modelos image-capable, você digita os números na ordem que quer tentar. Ex: `1,3,2` significa "tenta o 1, se falhar tenta o 3, depois o 2". Salvo em `~/.config/omni-img/selected.toml`.
 
-# 5. Ver config atual
+### 3. Gerar imagem
+
+```bash
+omni-img generate "um gato astronauta flutuando em saturno, pintura digital"
+```
+
+Vai:
+1. Tentar o primeiro modelo da sua lista
+2. Se der rate-limit (429) ou erro, cair pro próximo automaticamente
+3. Salvar a imagem em `./out/img_<modelo>_<timestamp>.png`
+4. Imprimir o caminho do arquivo
+
+#### Opções do generate
+
+```bash
+omni-img generate "prompt" --model gemini-2.5-flash-image   # força um modelo
+omni-img generate "prompt" --all                            # tenta TODOS, salva o que funcionar
+omni-img generate "prompt" --size 512x512                   # tamanho custom
+omni-img generate "prompt" --n 4                            # 4 variações
+omni-img generate "prompt" --all --size 1024x1024 --n 2
+```
+
+### 4. Editar imagem existente
+
+```bash
+omni-img edit foto.png "coloca um óculos de sol e fundo de praia"
+omni-img edit foto.png "transforma em pixel art" --all
+omni-img edit https://exemplo.com/foto.jpg "pintura a óleo" --model gpt-image-1
+```
+
+A imagem pode ser:
+- Caminho local (`./foto.png`)
+- URL `http://` ou `https://`
+- Data URL (`data:image/png;base64,...`)
+
+Funciona com o mesmo fallback chain do `generate`.
+
+### Test (atalho)
+
+```bash
+omni-img test
+```
+
+Mesma coisa que `generate` com prompt default — bom pra checar se credenciais tão funcionando.
+
+### Ver config atual
+
+```bash
 omni-img show
 ```
 
-## Config
+## Arquivos
 
-Ordem de prioridade:
-1. **env vars**: `OMNI_BASE_URL`, `OMNI_API_KEY`
-2. **arquivo**: `~/.config/omni-img/config.toml`
-
-Formato do arquivo:
-```toml
-base_url = "https://ominiroute.example.com"
-api_key = "sk-xxx"
-```
-
-## Arquivos gerados
-
-- `~/.config/omni-img/config.toml` — credenciais (nunca comitar)
-- `~/.config/omni-img/selected.toml` — modelos selecionados na ordem
-
-## Subcomandos
-
-| Comando | O que faz |
+| Arquivo | O quê |
 |---|---|
-| `omni-img config URL KEY` | Salva credenciais |
-| `omni-img models` | Lista modelos (marca image-capable) |
-| `omni-img pick` | Selecao interativa (numeros, ordem) |
-| `omni-img test [PROMPT]` | Gera 1 imagem (tenta cada modelo selecionado na ordem) |
-| `omni-img show` | Mostra config atual |
+| `~/.config/omni-img/config.toml` | base_url + api_key (criado pelo `config`) |
+| `~/.config/omni-img/selected.toml` | ordem de fallback dos modelos (criado pelo `pick`) |
+| `./out/img_*.{png,jpg,webp}` | imagens geradas (criado pelo `generate`) |
+| `./out/edit_*.{png,jpg,webp}` | imagens editadas (criado pelo `edit`) |
 
-## Deteccao de image-capable
+## Endpoints OmniRoute usados
 
-Heuristica por keyword no `id` do modelo ou nos metadados:
-- `image`, `imagen`, `dall-e`, `dalle`, `sd`, `flux`, `sdxl`, `midjourney`, `kandinsky`, `playground`, `gemini-image`
+| Verbo | Path | O quê |
+|---|---|---|
+| `GET` | `/v1/images/generations` | Lista modelos de imagem (canônico) |
+| `POST` | `/v1/images/generations` | Gera imagem (`{model, prompt, n?, size?}`) |
+| `POST` | `/v1/images/edits` | Edita imagem (multipart: `image`, `prompt`, `model`, `size`) |
 
-Se quiser adicionar mais keywords, edite a tupla `IMAGE_KEYWORDS` no script.
+Ref: https://github.com/diegosouzapw/OmniRoute/tree/main/src/app/api/v1/images
 
-## Integracao com Claude Code
+## Por que existe?
 
-Invoca via Bash tool. Claude Code consome stdout JSON cru.
+Gemini, GPT e outros têm **tiers gratuitos generosos** mas a API direta cobra caro e exige múltiplas contas/keys. O **OmniRoute** unifica tudo num único endpoint OpenAI-compatible. Este CLI te dá uma interface simples pra:
 
-```bash
-# Em qualquer sessa do Claude Code:
-omni-img models              # lista modelos
-omni-img test "prompt"       # testa
-```
+1. Listar modelos de imagem do OmniRoute
+2. Escolher a ordem de fallback (Gemini primeiro, GPT segundo, etc)
+3. Gerar/editar com retry automático quando um modelo tá rate-limited
 
-## Fallback round-robin
+Tudo sem hardcode — URL e key configuráveis, sem dependências externas (só stdlib Python).
 
-`omni-img test` tenta cada modelo da lista `selected.toml` em ordem ate um funcionar. Util pra descobrir qual provider/credential ta saudavel sem hardcode.
+## Limitações conhecidas
 
-## Filosofia
+- Requer OmniRoute com provider de imagem configurado
+- `edit` só funciona com providers que suportam `/v1/images/edits` (GPT-Image, Gemini-Nano-Banana, etc)
+- Sem streaming (gera 1 imagem por vez)
+- Sem máscara explícita por enquanto — passa o prompt de edição
 
-- **Sem hardcode** — toda config vem de env vars ou arquivo TOML
-- **Sem deps externas** — stdlib Python only
-- **Sem auto-update** — você controla quando atualizar (clone/pull manual)
-- **Sem telemetria** — zero network calls alem do OmniRoute que voce configurou
-- **Stack-friendly** — feito pra coexistir com `codegraph`, `claude-router`, `omniroute-image`, etc
+## Licença
 
-## License
-
-MIT © 2026 inovalabsx
+MIT
